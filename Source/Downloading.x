@@ -25,6 +25,7 @@ static BOOL YTMU(NSString *key) {
 @interface ELMTouchCommandPropertiesHandler : NSObject
 - (void)downloadAudio:(YTPlayerViewController *)playerResponse;
 - (void)downloadCoverImage:(YTPlayerViewController *)playerResponse;
+- (void)saveToServer:(YTPlayerViewController *)playerVC;
 - (NSString *)getURLFromManifest:(NSURL *)manifest;
 @end
 
@@ -63,6 +64,10 @@ static BOOL YTMU(NSString *key) {
 
         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DOWNLOAD_AUDIO") iconImage:[%c(YTUIResources) audioOutline] style:0 handler:^ {
             [self downloadAudio:playerVC];
+        }]];
+
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:@"Save to Server" iconImage:[UIImage systemImageNamed:@"icloud.and.arrow.up"] style:0 handler:^ {
+            [self saveToServer:playerVC];
         }]];
 
         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DOWNLOAD_COVER") iconImage:[%c(YTUIResources) outlineImageWithColor:[UIColor whiteColor]] style:0 handler:^ {
@@ -168,5 +173,39 @@ static BOOL YTMU(NSString *key) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [hud hideAnimated:YES];
     });
+}
+
+%new
+- (void)saveToServer:(YTPlayerViewController *)playerVC {
+    YTPlayerResponse *playerResponse = playerVC.playerResponse;
+
+    NSString *title = [playerResponse.playerData.videoDetails.title stringByReplacingOccurrencesOfString:@"/" withString:@""];
+    NSString *author = [playerResponse.playerData.videoDetails.author stringByReplacingOccurrencesOfString:@"/" withString:@""];
+    NSString *urlStr = playerResponse.playerData.streamingData.hlsManifestURL;
+
+    FFMpegDownloader *ffmpeg = [[FFMpegDownloader alloc] init];
+    ffmpeg.tempName = playerVC.contentVideoID;
+    ffmpeg.mediaName = [NSString stringWithFormat:@"%@ - %@", author, title];
+    ffmpeg.title = title;
+    ffmpeg.artist = author;
+    ffmpeg.duration = round(playerVC.currentVideoTotalMediaTime);
+
+    NSString *extractedURL = [self getURLFromManifest:[NSURL URLWithString:urlStr]];
+    
+    if (extractedURL.length > 0) {
+        // Get cover URL for embedding
+        NSMutableArray *thumbnailsArray = playerResponse.playerData.videoDetails.thumbnail.thumbnailsArray;
+        YTIThumbnailDetails_Thumbnail *thumbnail = [thumbnailsArray lastObject];
+        if (thumbnail) {
+            ffmpeg.coverURL = thumbnail.URL;
+        }
+        
+        [ffmpeg downloadAudioAndUpload:extractedURL];
+    } else {
+        YTAlertView *alertView = [%c(YTAlertView) infoDialog];
+        alertView.title = LOC(@"OOPS");
+        alertView.subtitle = LOC(@"LINK_NOT_FOUND");
+        [alertView show];
+    }
 }
 %end
