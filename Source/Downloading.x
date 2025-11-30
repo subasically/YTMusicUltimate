@@ -12,6 +12,7 @@
 #import "Headers/YTIFormatStream.h"
 #import "Headers/YTAlertView.h"
 #import "Headers/ELMNodeController.h"
+#import "Headers/ServerLibraryChecker.h"
 
 static BOOL YTMU(NSString *key) {
     NSDictionary *YTMUltimateDict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
@@ -27,6 +28,7 @@ static BOOL YTMU(NSString *key) {
 - (void)downloadCoverImage:(YTPlayerViewController *)playerResponse;
 - (void)saveToServer:(YTPlayerViewController *)playerVC;
 - (NSString *)getURLFromManifest:(NSURL *)manifest;
+- (void)updateServerIndicatorOnView:(UIView *)view withTitle:(NSString *)title artist:(NSString *)artist;
 @end
 
 %hook ELMTouchCommandPropertiesHandler
@@ -58,15 +60,29 @@ static BOOL YTMU(NSString *key) {
     YTPlayerResponse *playerResponse = playerVC.playerResponse;
 
     if (playerResponse) {
+        // Add/update the server library indicator on the now playing view
+        [self updateServerIndicatorOnView:playingVC.view withTitle:playerResponse.playerData.videoDetails.title artist:playerResponse.playerData.videoDetails.author];
+        
         YTMActionSheetController *sheetController = [%c(YTMActionSheetController) musicActionSheetController];
         sheetController.sourceView = tapRecognizer.view;
-        [sheetController addHeaderWithTitle:LOC(@"SELECT_ACTION") subtitle:nil];
+        
+        // Check if track is in server library
+        NSString *title = playerResponse.playerData.videoDetails.title;
+        NSString *artist = playerResponse.playerData.videoDetails.author;
+        BOOL inLibrary = [ServerLibraryChecker hasCachedTracks] && [ServerLibraryChecker isTrackInLibrary:title artist:artist];
+        
+        // Show library status in header subtitle
+        NSString *subtitle = inLibrary ? @"✓ In server library" : @"⚠ Not in server library";
+        [sheetController addHeaderWithTitle:LOC(@"SELECT_ACTION") subtitle:subtitle];
 
         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DOWNLOAD_AUDIO") iconImage:[%c(YTUIResources) audioOutline] style:0 handler:^ {
             [self downloadAudio:playerVC];
         }]];
+        
+        NSString *saveTitle = inLibrary ? @"Save to Server ✓" : @"Save to Server ⚠";
+        UIImage *saveIcon = inLibrary ? [UIImage systemImageNamed:@"checkmark.icloud"] : [UIImage systemImageNamed:@"icloud.and.arrow.up"];
 
-        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:@"Save to Server" iconImage:[UIImage systemImageNamed:@"icloud.and.arrow.up"] style:0 handler:^ {
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:saveTitle iconImage:saveIcon style:0 handler:^ {
             [self saveToServer:playerVC];
         }]];
 
@@ -208,4 +224,45 @@ static BOOL YTMU(NSString *key) {
         [alertView show];
     }
 }
+
+%new
+- (void)updateServerIndicatorOnView:(UIView *)view withTitle:(NSString *)title artist:(NSString *)artist {
+    static NSInteger const INDICATOR_TAG = 7777;
+    
+    // Remove existing indicator
+    UIView *existing = [view viewWithTag:INDICATOR_TAG];
+    [existing removeFromSuperview];
+    
+    if (!title || title.length == 0) return;
+    
+    BOOL inLibrary = [ServerLibraryChecker hasCachedTracks] && [ServerLibraryChecker isTrackInLibrary:title artist:artist];
+    
+    // Create label indicator
+    UILabel *indicator = [[UILabel alloc] init];
+    indicator.tag = INDICATOR_TAG;
+    indicator.textAlignment = NSTextAlignmentCenter;
+    indicator.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    indicator.translatesAutoresizingMaskIntoConstraints = NO;
+    indicator.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    indicator.layer.cornerRadius = 10;
+    indicator.clipsToBounds = YES;
+    
+    if (inLibrary) {
+        indicator.text = @"  ✓ In library  ";
+        indicator.textColor = [UIColor systemGreenColor];
+    } else {
+        indicator.text = @"  ⚠ Not in library  ";
+        indicator.textColor = [UIColor systemOrangeColor];
+    }
+    
+    [view addSubview:indicator];
+    
+    // Position higher up
+    [NSLayoutConstraint activateConstraints:@[
+        [indicator.topAnchor constraintEqualToAnchor:view.topAnchor constant:50],
+        [indicator.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
+        [indicator.heightAnchor constraintEqualToConstant:20]
+    ]];
+}
+
 %end

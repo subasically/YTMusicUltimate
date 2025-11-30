@@ -13,4 +13,6 @@
 - (void)ytmuButtonAction:(MDCButton *)sender;
 - (void)downloadAudio;
 - (void)downloadCoverImage;
+- (void)updateDownloadBadge;
+- (UIView *)findDownloadButtonInView:(UIView *)view;
 @end

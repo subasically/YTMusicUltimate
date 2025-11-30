@@ -11,7 +11,6 @@
 static NSArray *cachedTracks = nil;
 static NSDate *lastFetchTime = nil;
 static const NSTimeInterval CACHE_DURATION = 300; // 5 minutes
-static const NSInteger SERVER_CHECK_INDICATOR_TAG = 9999;
 
 static BOOL YTMU(NSString *key) {
     NSDictionary *YTMUltimateDict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
@@ -20,12 +19,16 @@ static BOOL YTMU(NSString *key) {
 
 @interface YTMNowPlayingViewController (ServerCheck)
 - (void)updateServerCheckIndicator;
+- (void)refreshLibraryAndUpdate;
+- (void)showCheckingIndicator;
 @end
 
 @interface ServerLibraryChecker : NSObject
 + (void)fetchTracksWithCompletion:(void (^)(NSArray *tracks))completion;
++ (void)forceRefreshWithCompletion:(void (^)(NSArray *tracks))completion;
 + (BOOL)isTrackInLibrary:(NSString *)title artist:(NSString *)artist;
 + (NSString *)cleanTitle:(NSString *)title;
++ (BOOL)hasCachedTracks;
 @end
 
 @implementation ServerLibraryChecker
@@ -33,17 +36,26 @@ static BOOL YTMU(NSString *key) {
 + (void)fetchTracksWithCompletion:(void (^)(NSArray *tracks))completion {
     // Return cached tracks if still valid
     if (cachedTracks && lastFetchTime && [[NSDate date] timeIntervalSinceDate:lastFetchTime] < CACHE_DURATION) {
+        NSLog(@"[YTMU] Using cached tracks: %lu items", (unsigned long)cachedTracks.count);
         if (completion) completion(cachedTracks);
         return;
     }
     
+    NSLog(@"[YTMU] Fetching tracks from server...");
     NSURL *url = [NSURL URLWithString:@"http://62.146.177.62:8080/api/tracks?sort=title&order=asc"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.timeoutInterval = 10;
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (error || !data) {
+        if (error) {
+            NSLog(@"[YTMU] Fetch tracks error: %@", error.localizedDescription);
+            if (completion) completion(cachedTracks ?: @[]);
+            return;
+        }
+        
+        if (!data) {
+            NSLog(@"[YTMU] Fetch tracks: no data");
             if (completion) completion(cachedTracks ?: @[]);
             return;
         }
@@ -51,13 +63,21 @@ static BOOL YTMU(NSString *key) {
         NSError *jsonError;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
         
-        if (jsonError || !json[@"tracks"]) {
+        if (jsonError) {
+            NSLog(@"[YTMU] JSON parse error: %@", jsonError.localizedDescription);
+            if (completion) completion(cachedTracks ?: @[]);
+            return;
+        }
+        
+        if (!json[@"tracks"]) {
+            NSLog(@"[YTMU] No tracks key in response: %@", json);
             if (completion) completion(cachedTracks ?: @[]);
             return;
         }
         
         cachedTracks = json[@"tracks"];
         lastFetchTime = [NSDate date];
+        NSLog(@"[YTMU] Fetched %lu tracks from server", (unsigned long)cachedTracks.count);
         
         if (completion) completion(cachedTracks);
     }];
@@ -129,6 +149,18 @@ static BOOL YTMU(NSString *key) {
     return NO;
 }
 
++ (BOOL)hasCachedTracks {
+    return cachedTracks != nil && cachedTracks.count > 0;
+}
+
++ (void)forceRefreshWithCompletion:(void (^)(NSArray *tracks))completion {
+    NSLog(@"[YTMU] Force refreshing library cache");
+    // Clear the cache to force a new fetch
+    cachedTracks = nil;
+    lastFetchTime = nil;
+    [self fetchTracksWithCompletion:completion];
+}
+
 @end
 
 %hook YTMNowPlayingViewController
@@ -146,6 +178,12 @@ static BOOL YTMU(NSString *key) {
                                              selector:@selector(updateServerCheckIndicator) 
                                                  name:@"ServerLibraryCheckUpdate" 
                                                object:nil];
+    
+    // Register for library refresh after upload
+    [[NSNotificationCenter defaultCenter] addObserver:self 
+                                             selector:@selector(refreshLibraryAndUpdate) 
+                                                 name:@"ServerLibraryRefreshNeeded" 
+                                               object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -153,7 +191,9 @@ static BOOL YTMU(NSString *key) {
     
     if (!YTMU(@"YTMUltimateIsEnabled")) return;
     
-    // Delay to ensure player data is available
+    NSLog(@"[YTMU] YTMNowPlayingViewController viewWillAppear");
+    
+    // Delay 1 second to ensure playerResponse is ready
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self updateServerCheckIndicator];
     });
@@ -161,59 +201,152 @@ static BOOL YTMU(NSString *key) {
 
 %new
 - (void)updateServerCheckIndicator {
+    NSLog(@"[YTMU] updateServerCheckIndicator called");
+    
     YTMWatchViewController *watchVC = (YTMWatchViewController *)self.parentViewController;
-    if (!watchVC) return;
+    if (!watchVC) {
+        NSLog(@"[YTMU] No watchVC");
+        return;
+    }
     
     YTPlayerViewController *playerVC = watchVC.playerViewController;
-    if (!playerVC) return;
+    if (!playerVC) {
+        NSLog(@"[YTMU] No playerVC");
+        return;
+    }
     
     YTPlayerResponse *playerResponse = playerVC.playerResponse;
-    if (!playerResponse) return;
+    if (!playerResponse) {
+        NSLog(@"[YTMU] No playerResponse");
+        return;
+    }
     
     NSString *title = playerResponse.playerData.videoDetails.title;
     NSString *artist = playerResponse.playerData.videoDetails.author;
     
-    if (!title || title.length == 0) return;
+    NSLog(@"[YTMU] Checking track: %@ - %@", artist, title);
+    
+    if (!title || title.length == 0) {
+        NSLog(@"[YTMU] No title");
+        return;
+    }
+    
+    UIView *nowPlayingView = self.view;
+    if (!nowPlayingView) {
+        NSLog(@"[YTMU] No nowPlayingView");
+        return;
+    }
+    
+    // Use same tag as Downloading.x
+    static NSInteger const INDICATOR_TAG = 7777;
+    
+    // Show "Checking..." first
+    UIView *existingIndicator = [nowPlayingView viewWithTag:INDICATOR_TAG];
+    [existingIndicator removeFromSuperview];
+    
+    UILabel *checkingIndicator = [[UILabel alloc] init];
+    checkingIndicator.tag = INDICATOR_TAG;
+    checkingIndicator.textAlignment = NSTextAlignmentCenter;
+    checkingIndicator.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    checkingIndicator.translatesAutoresizingMaskIntoConstraints = NO;
+    checkingIndicator.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    checkingIndicator.layer.cornerRadius = 10;
+    checkingIndicator.clipsToBounds = YES;
+    checkingIndicator.text = @"  ⏳ Checking library...  ";
+    checkingIndicator.textColor = [UIColor systemGrayColor];
+    
+    [nowPlayingView addSubview:checkingIndicator];
+    [NSLayoutConstraint activateConstraints:@[
+        [checkingIndicator.topAnchor constraintEqualToAnchor:nowPlayingView.topAnchor constant:50],
+        [checkingIndicator.centerXAnchor constraintEqualToAnchor:nowPlayingView.centerXAnchor],
+        [checkingIndicator.heightAnchor constraintEqualToConstant:20]
+    ]];
+    
+    // Track when we started checking
+    NSDate *checkStartTime = [NSDate date];
+    
+    [ServerLibraryChecker fetchTracksWithCompletion:^(NSArray *tracks) {
+        BOOL inLibrary = [ServerLibraryChecker isTrackInLibrary:title artist:artist];
+        NSLog(@"[YTMU] Track in library: %@", inLibrary ? @"YES" : @"NO");
+        
+        // Calculate how long the check took
+        NSTimeInterval elapsed = [[NSDate date] timeIntervalSinceDate:checkStartTime];
+        NSTimeInterval minDisplayTime = 1.0; // Minimum 1 second
+        NSTimeInterval delay = MAX(0, minDisplayTime - elapsed);
+        
+        // Wait at least 1 second total before showing result
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            // Remove checking indicator
+            UIView *existing = [nowPlayingView viewWithTag:INDICATOR_TAG];
+            [existing removeFromSuperview];
+            
+            // Create final indicator
+            UILabel *indicator = [[UILabel alloc] init];
+            indicator.tag = INDICATOR_TAG;
+            indicator.textAlignment = NSTextAlignmentCenter;
+            indicator.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+            indicator.translatesAutoresizingMaskIntoConstraints = NO;
+            indicator.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+            indicator.layer.cornerRadius = 10;
+            indicator.clipsToBounds = YES;
+            
+            if (inLibrary) {
+                indicator.text = @"  ✓ In library  ";
+                indicator.textColor = [UIColor systemGreenColor];
+            } else {
+                indicator.text = @"  ⚠ Not in library  ";
+                indicator.textColor = [UIColor systemOrangeColor];
+            }
+            
+            [nowPlayingView addSubview:indicator];
+            
+            [NSLayoutConstraint activateConstraints:@[
+                [indicator.topAnchor constraintEqualToAnchor:nowPlayingView.topAnchor constant:50],
+                [indicator.centerXAnchor constraintEqualToAnchor:nowPlayingView.centerXAnchor],
+                [indicator.heightAnchor constraintEqualToConstant:20]
+            ]];
+            
+            NSLog(@"[YTMU] Added indicator label: %@", indicator.text);
+        });
+    }];
+}
+
+%new
+- (void)refreshLibraryAndUpdate {
+    NSLog(@"[YTMU] refreshLibraryAndUpdate called - forcing cache refresh");
     
     UIView *nowPlayingView = self.view;
     if (!nowPlayingView) return;
     
-    // Remove existing indicator
-    UIView *existingIndicator = [nowPlayingView viewWithTag:SERVER_CHECK_INDICATOR_TAG];
+    // Use same tag
+    static NSInteger const INDICATOR_TAG = 7777;
+    
+    // Show "Checking..." while refreshing
+    UIView *existingIndicator = [nowPlayingView viewWithTag:INDICATOR_TAG];
     [existingIndicator removeFromSuperview];
     
-    [ServerLibraryChecker fetchTracksWithCompletion:^(NSArray *tracks) {
+    UILabel *checkingIndicator = [[UILabel alloc] init];
+    checkingIndicator.tag = INDICATOR_TAG;
+    checkingIndicator.textAlignment = NSTextAlignmentCenter;
+    checkingIndicator.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    checkingIndicator.translatesAutoresizingMaskIntoConstraints = NO;
+    checkingIndicator.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    checkingIndicator.layer.cornerRadius = 10;
+    checkingIndicator.clipsToBounds = YES;
+    checkingIndicator.text = @"  ⏳ Updating library...  ";
+    checkingIndicator.textColor = [UIColor systemGrayColor];
+    
+    [nowPlayingView addSubview:checkingIndicator];
+    [NSLayoutConstraint activateConstraints:@[
+        [checkingIndicator.topAnchor constraintEqualToAnchor:nowPlayingView.topAnchor constant:50],
+        [checkingIndicator.centerXAnchor constraintEqualToAnchor:nowPlayingView.centerXAnchor],
+        [checkingIndicator.heightAnchor constraintEqualToConstant:20]
+    ]];
+    
+    // Force refresh by clearing cache and fetching again
+    [ServerLibraryChecker forceRefreshWithCompletion:^(NSArray *tracks) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            BOOL inLibrary = [ServerLibraryChecker isTrackInLibrary:title artist:artist];
-            
-            if (!inLibrary) {
-                // Create indicator - small red circle with cloud icon
-                UIView *indicator = [[UIView alloc] init];
-                indicator.tag = SERVER_CHECK_INDICATOR_TAG;
-                indicator.backgroundColor = [[UIColor systemRedColor] colorWithAlphaComponent:0.9];
-                indicator.layer.cornerRadius = 14;
-                indicator.translatesAutoresizingMaskIntoConstraints = NO;
-                
-                UIImageView *iconView = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"icloud.slash"]];
-                iconView.tintColor = [UIColor whiteColor];
-                iconView.contentMode = UIViewContentModeScaleAspectFit;
-                iconView.translatesAutoresizingMaskIntoConstraints = NO;
-                [indicator addSubview:iconView];
-                
-                [nowPlayingView addSubview:indicator];
-                
-                [NSLayoutConstraint activateConstraints:@[
-                    [indicator.topAnchor constraintEqualToAnchor:nowPlayingView.safeAreaLayoutGuide.topAnchor constant:60],
-                    [indicator.leadingAnchor constraintEqualToAnchor:nowPlayingView.leadingAnchor constant:16],
-                    [indicator.widthAnchor constraintEqualToConstant:28],
-                    [indicator.heightAnchor constraintEqualToConstant:28],
-                    
-                    [iconView.centerXAnchor constraintEqualToAnchor:indicator.centerXAnchor],
-                    [iconView.centerYAnchor constraintEqualToAnchor:indicator.centerYAnchor],
-                    [iconView.widthAnchor constraintEqualToConstant:16],
-                    [iconView.heightAnchor constraintEqualToConstant:16]
-                ]];
-            }
+            [self updateServerCheckIndicator];
         });
     }];
 }
@@ -221,15 +354,18 @@ static BOOL YTMU(NSString *key) {
 %end
 
 // Update indicator when song changes
-%hook YTMWatchViewController
+%hook YTPlayerViewController
 
 - (void)playbackController:(id)controller didActivateVideo:(id)video withPlaybackData:(id)data {
     %orig;
     
     if (!YTMU(@"YTMUltimateIsEnabled")) return;
     
-    // Delay slightly to ensure playerResponse is updated
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    NSLog(@"[YTMU] didActivateVideo called - song changed!");
+    
+    // Delay 1 second to ensure playerResponse is updated
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"[YTMU] Posting ServerLibraryCheckUpdate notification");
         [[NSNotificationCenter defaultCenter] postNotificationName:@"ServerLibraryCheckUpdate" object:nil];
     });
 }

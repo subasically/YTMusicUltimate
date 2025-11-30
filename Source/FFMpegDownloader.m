@@ -91,10 +91,11 @@
     NSURL *tempAudioURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_temp.m4a", self.tempName]];
     NSURL *tempCoverURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_cover.jpg", self.tempName]];
     
-    // Use readable filename for upload: "Artist - Title.mp3"
-    NSString *safeMediaName = [[self.mediaName stringByReplacingOccurrencesOfString:@":" withString:@"-"] 
-                               stringByReplacingOccurrencesOfString:@"\"" withString:@""];
-    NSURL *outputURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.mp3", safeMediaName]];
+    // Use readable filename for upload: "Artist - Title.m4a"
+    NSString *safeMediaName = [[[self.mediaName stringByReplacingOccurrencesOfString:@":" withString:@"-"] 
+                               stringByReplacingOccurrencesOfString:@"\"" withString:@""]
+                               stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
+    NSURL *outputURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.m4a", safeMediaName]];
     
     [[NSFileManager defaultManager] removeItemAtURL:tempAudioURL error:nil];
     [[NSFileManager defaultManager] removeItemAtURL:tempCoverURL error:nil];
@@ -114,9 +115,14 @@
     [MobileFFmpegConfig setLogDelegate:self];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // First download the audio stream
-        int returnCode = [MobileFFmpeg execute:[NSString stringWithFormat:@"-i \"%@\" -c copy \"%@\"", audioURL, tempAudioURL.path]];
+        NSString *downloadCmd = [NSString stringWithFormat:@"-i \"%@\" -c copy \"%@\"", audioURL, tempAudioURL.path];
+        NSLog(@"[YTMU] Download command: %@", downloadCmd);
+        int returnCode = [MobileFFmpeg execute:downloadCmd];
+        NSLog(@"[YTMU] Download return code: %d", returnCode);
         
         if (returnCode != RETURN_CODE_SUCCESS) {
+            NSString *output = [MobileFFmpegConfig getLastCommandOutput];
+            NSLog(@"[YTMU] Download failed output: %@", output);
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self showErrorHUD:@"Download failed"];
                 [[NSFileManager defaultManager] removeItemAtURL:tempAudioURL error:nil];
@@ -126,13 +132,13 @@
         }
         
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.hud.label.text = @"Converting...";
+            self.hud.label.text = @"Processing...";
         });
         
-        // Build FFmpeg command for MP3 conversion with metadata
+        // Build FFmpeg command - just add metadata and cover to M4A (no transcoding needed)
         NSMutableString *ffmpegCmd = [NSMutableString string];
         
-        // Input audio - quote the path for spaces
+        // Input audio
         [ffmpegCmd appendFormat:@"-i \"%@\"", tempAudioURL.path];
         
         // Input cover if exists
@@ -147,36 +153,36 @@
             [ffmpegCmd appendString:@" -map 1:0"];
         }
         
-        // Audio codec: 128kbps MP3
-        [ffmpegCmd appendString:@" -c:a libmp3lame -b:a 128k"];
-        
-        // Cover image settings
+        // Copy audio codec (no transcoding), set cover disposition
+        [ffmpegCmd appendString:@" -c:a copy"];
         if (hasCover) {
             [ffmpegCmd appendString:@" -c:v mjpeg -disposition:v attached_pic"];
         }
         
-        // Metadata - escape double quotes in values
-        NSString *escapedTitle = [[self.title stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
-        NSString *escapedArtist = [[self.artist stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+        // Metadata
+        NSString *escapedTitle = [[self.title stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""] ?: @"";
+        NSString *escapedArtist = [[self.artist stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""] ?: @"";
         
-        [ffmpegCmd appendFormat:@" -metadata title=\"%@\"", escapedTitle ?: @""];
-        [ffmpegCmd appendFormat:@" -metadata artist=\"%@\"", escapedArtist ?: @""];
+        [ffmpegCmd appendFormat:@" -metadata title=\"%@\"", escapedTitle];
+        [ffmpegCmd appendFormat:@" -metadata artist=\"%@\"", escapedArtist];
         
-        // ID3v2 version for better compatibility
-        [ffmpegCmd appendString:@" -id3v2_version 3"];
-        
-        // Output file - quote the path
+        // Output file
         [ffmpegCmd appendFormat:@" -y \"%@\"", outputURL.path];
         
+        NSLog(@"[YTMU] Convert command: %@", ffmpegCmd);
         returnCode = [MobileFFmpeg execute:ffmpegCmd];
+        NSLog(@"[YTMU] Convert return code: %d", returnCode);
         
         // Clean up temp files
         [[NSFileManager defaultManager] removeItemAtURL:tempAudioURL error:nil];
         [[NSFileManager defaultManager] removeItemAtURL:tempCoverURL error:nil];
         
         if (returnCode != RETURN_CODE_SUCCESS) {
+            NSString *output = [MobileFFmpegConfig getLastCommandOutput];
+            NSLog(@"[YTMU] Convert failed output: %@", output);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self showErrorHUD:@"Conversion failed"];
+                [self showErrorHUD:@"Processing failed"];
+                [UIPasteboard generalPasteboard].string = output;
                 [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
             });
             return;
@@ -189,7 +195,7 @@
         });
         
         [self uploadFileToServer:outputURL completion:^(BOOL success, NSString *message) {
-            // Clean up the MP3 file after upload
+            // Clean up the output file after upload
             [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
             
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -199,10 +205,16 @@
                 self.hud.mode = MBProgressHUDModeCustomView;
                 
                 if (success) {
-                    self.hud.label.text = @"Uploaded!";
+                    self.hud.label.text = message ?: @"Uploaded!";
                     UIImageView *checkmarkImageView = [[UIImageView alloc] initWithImage:[self imageWithSystemIconNamed:@"checkmark"]];
                     checkmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
                     self.hud.customView = checkmarkImageView;
+                    
+                    // Refresh library cache and update indicator after successful upload
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        // Force refresh the cache by clearing it
+                        [[NSNotificationCenter defaultCenter] postNotificationName:@"ServerLibraryRefreshNeeded" object:nil];
+                    });
                 } else {
                     self.hud.label.text = message ?: @"Upload failed";
                     self.hud.label.numberOfLines = 0;
@@ -223,17 +235,26 @@
     
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
     if (!fileData) {
+        NSLog(@"[YTMU] Failed to read file at: %@", fileURL.path);
         completion(NO, @"Failed to read file");
         return;
     }
     
+    NSLog(@"[YTMU] Uploading file: %@ (%lu bytes)", fileURL.lastPathComponent, (unsigned long)fileData.length);
+    
     NSString *filename = [fileURL lastPathComponent];
     NSString *boundary = [NSString stringWithFormat:@"----FormBoundary%@", [[NSUUID UUID] UUIDString]];
+    
+    // Determine content type based on file extension
+    NSString *contentType = @"audio/mp4";
+    if ([filename.pathExtension.lowercaseString isEqualToString:@"mp3"]) {
+        contentType = @"audio/mpeg";
+    }
     
     NSMutableData *body = [NSMutableData data];
     [body appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\n", filename] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[@"Content-Type: audio/mpeg\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding]];
+    [body appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", contentType] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:fileData];
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
     
