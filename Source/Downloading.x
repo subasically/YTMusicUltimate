@@ -66,23 +66,13 @@ static BOOL YTMU(NSString *key) {
         YTMActionSheetController *sheetController = [%c(YTMActionSheetController) musicActionSheetController];
         sheetController.sourceView = tapRecognizer.view;
         
-        // Check if track is in server library
-        NSString *title = playerResponse.playerData.videoDetails.title;
-        NSString *artist = playerResponse.playerData.videoDetails.author;
-        BOOL inLibrary = [ServerLibraryChecker hasCachedTracks] && [ServerLibraryChecker isTrackInLibrary:title artist:artist];
-        
-        // Show library status in header subtitle
-        NSString *subtitle = inLibrary ? @"✓ In server library" : @"⚠ Not in server library";
-        [sheetController addHeaderWithTitle:LOC(@"SELECT_ACTION") subtitle:subtitle];
+        [sheetController addHeaderWithTitle:LOC(@"SELECT_ACTION") subtitle:nil];
 
         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DOWNLOAD_AUDIO") iconImage:[%c(YTUIResources) audioOutline] style:0 handler:^ {
             [self downloadAudio:playerVC];
         }]];
         
-        NSString *saveTitle = inLibrary ? @"Save to Server ✓" : @"Save to Server ⚠";
-        UIImage *saveIcon = inLibrary ? [UIImage systemImageNamed:@"checkmark.icloud"] : [UIImage systemImageNamed:@"icloud.and.arrow.up"];
-
-        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:saveTitle iconImage:saveIcon style:0 handler:^ {
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:@"Save to Server" iconImage:[UIImage systemImageNamed:@"icloud.and.arrow.up"] style:0 handler:^ {
             [self saveToServer:playerVC];
         }]];
 

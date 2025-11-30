@@ -100,7 +100,9 @@ static BOOL YTMU(NSString *key) {
         @"\\s*\\[Audio.*?\\]",
         @"\\s*\\(Music Video\\)",
         @"\\s*\\(HD\\)",
-        @"\\s*\\(HQ\\)"
+        @"\\s*\\(HQ\\)",
+        @"\\s*-\\s*\\(audio\\s*\\d*\\)",  // - (audio 2004)
+        @"\\s*\\(audio\\s*\\d*\\)"         // (audio 2004)
     ];
     
     for (NSString *pattern in patterns) {
@@ -109,6 +111,50 @@ static BOOL YTMU(NSString *key) {
     }
     
     return [cleaned stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+}
+
++ (NSString *)cleanArtist:(NSString *)artist {
+    if (!artist) return @"";
+    
+    NSString *cleaned = artist;
+    
+    // Remove "Official" suffix variations
+    NSArray *patterns = @[
+        @"\\s+Official$",
+        @"\\s+official$",
+        @"\\s+OFFICIAL$",
+        @"\\s+-\\s*Official$",
+        @"\\s+VEVO$",
+        @"\\s+vevo$"
+    ];
+    
+    for (NSString *pattern in patterns) {
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:NSRegularExpressionCaseInsensitive error:nil];
+        cleaned = [regex stringByReplacingMatchesInString:cleaned options:0 range:NSMakeRange(0, cleaned.length) withTemplate:@""];
+    }
+    
+    return [cleaned stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+}
+
++ (NSString *)extractTitleFromCombined:(NSString *)title artist:(NSString *)artist {
+    // Handle titles like "Artist - Song Title" by extracting just the song title
+    if (!title) return @"";
+    
+    NSString *cleanedArtist = [[self cleanArtist:artist] lowercaseString];
+    NSString *lowerTitle = [title lowercaseString];
+    
+    // Check if title starts with artist name followed by separator
+    NSArray *separators = @[@" - ", @" – ", @" — ", @": "];
+    for (NSString *sep in separators) {
+        if ([lowerTitle hasPrefix:[cleanedArtist stringByAppendingString:sep]]) {
+            NSRange range = [title rangeOfString:sep];
+            if (range.location != NSNotFound) {
+                return [[title substringFromIndex:range.location + range.length] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            }
+        }
+    }
+    
+    return title;
 }
 
 + (NSString *)removeDiacritics:(NSString *)string {
@@ -125,31 +171,55 @@ static BOOL YTMU(NSString *key) {
 + (BOOL)isTrackInLibrary:(NSString *)title artist:(NSString *)artist {
     if (!cachedTracks || cachedTracks.count == 0) return YES; // Assume exists if no cache
     
-    NSString *cleanedTitle = [self removeDiacritics:[[self cleanTitle:title] lowercaseString]];
-    NSString *normalizedArtist = [self removeDiacritics:[artist lowercaseString]] ?: @"";
+    // Clean and normalize the input
+    NSString *cleanedArtist = [self cleanArtist:artist];
+    NSString *cleanedTitle = [self cleanTitle:title];
+    
+    // Also try extracting song title if format is "Artist - Song Title"
+    NSString *extractedTitle = [self extractTitleFromCombined:cleanedTitle artist:cleanedArtist];
+    
+    NSString *normalizedTitle = [self removeDiacritics:[cleanedTitle lowercaseString]];
+    NSString *normalizedExtractedTitle = [self removeDiacritics:[extractedTitle lowercaseString]];
+    NSString *normalizedArtist = [self removeDiacritics:[cleanedArtist lowercaseString]] ?: @"";
     
     for (NSDictionary *track in cachedTracks) {
         NSString *trackTitle = [self removeDiacritics:[[track[@"title"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
-        NSString *trackArtist = [self removeDiacritics:[[track[@"artist"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+        NSString *trackArtist = [self removeDiacritics:[[self cleanArtist:track[@"artist"] ?: @""] lowercaseString]];
         
-        // Exact title + artist match
-        if ([trackTitle isEqualToString:cleanedTitle]) {
-            if (normalizedArtist.length > 0 && trackArtist.length > 0) {
-                if ([trackArtist containsString:normalizedArtist] || [normalizedArtist containsString:trackArtist]) {
-                    return YES;
-                }
-            }
+        // Check artist match (flexible)
+        BOOL artistMatch = (normalizedArtist.length == 0 || trackArtist.length == 0 ||
+                           [trackArtist containsString:normalizedArtist] || 
+                           [normalizedArtist containsString:trackArtist]);
+        
+        if (!artistMatch) continue;
+        
+        // Exact title match
+        if ([trackTitle isEqualToString:normalizedTitle] || 
+            [trackTitle isEqualToString:normalizedExtractedTitle]) {
+            return YES;
         }
         
         // Title contains match with length check
-        if (trackTitle.length > 0 && cleanedTitle.length > 0) {
-            NSUInteger shorter = MIN(trackTitle.length, cleanedTitle.length);
-            NSUInteger longer = MAX(trackTitle.length, cleanedTitle.length);
+        if (trackTitle.length > 0) {
+            // Try with full cleaned title
+            if (normalizedTitle.length > 0) {
+                NSUInteger shorter = MIN(trackTitle.length, normalizedTitle.length);
+                NSUInteger longer = MAX(trackTitle.length, normalizedTitle.length);
+                
+                if ((float)shorter / longer >= 0.5) {
+                    if ([trackTitle containsString:normalizedTitle] || [normalizedTitle containsString:trackTitle]) {
+                        return YES;
+                    }
+                }
+            }
             
-            if ((float)shorter / longer >= 0.5) {
-                if ([trackTitle containsString:cleanedTitle] || [cleanedTitle containsString:trackTitle]) {
-                    if (normalizedArtist.length == 0 || trackArtist.length == 0 ||
-                        [trackArtist containsString:normalizedArtist] || [normalizedArtist containsString:trackArtist]) {
+            // Try with extracted title (from "Artist - Song" format)
+            if (normalizedExtractedTitle.length > 0 && ![normalizedExtractedTitle isEqualToString:normalizedTitle]) {
+                NSUInteger shorter = MIN(trackTitle.length, normalizedExtractedTitle.length);
+                NSUInteger longer = MAX(trackTitle.length, normalizedExtractedTitle.length);
+                
+                if ((float)shorter / longer >= 0.5) {
+                    if ([trackTitle containsString:normalizedExtractedTitle] || [normalizedExtractedTitle containsString:trackTitle]) {
                         return YES;
                     }
                 }
