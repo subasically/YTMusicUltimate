@@ -114,7 +114,7 @@
     [MobileFFmpegConfig setLogDelegate:self];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // First download the audio stream
-        int returnCode = [MobileFFmpeg execute:[NSString stringWithFormat:@"-i %@ -c copy %@", audioURL, tempAudioURL]];
+        int returnCode = [MobileFFmpeg execute:[NSString stringWithFormat:@"-i \"%@\" -c copy \"%@\"", audioURL, tempAudioURL.path]];
         
         if (returnCode != RETURN_CODE_SUCCESS) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -132,13 +132,13 @@
         // Build FFmpeg command for MP3 conversion with metadata
         NSMutableString *ffmpegCmd = [NSMutableString string];
         
-        // Input audio
-        [ffmpegCmd appendFormat:@"-i %@", tempAudioURL.path];
+        // Input audio - quote the path for spaces
+        [ffmpegCmd appendFormat:@"-i \"%@\"", tempAudioURL.path];
         
         // Input cover if exists
         BOOL hasCover = [[NSFileManager defaultManager] fileExistsAtPath:tempCoverURL.path];
         if (hasCover) {
-            [ffmpegCmd appendFormat:@" -i %@", tempCoverURL.path];
+            [ffmpegCmd appendFormat:@" -i \"%@\"", tempCoverURL.path];
         }
         
         // Map streams
@@ -155,18 +155,18 @@
             [ffmpegCmd appendString:@" -c:v mjpeg -disposition:v attached_pic"];
         }
         
-        // Metadata - escape special characters
-        NSString *escapedTitle = [self.title stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
-        NSString *escapedArtist = [self.artist stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
+        // Metadata - escape double quotes in values
+        NSString *escapedTitle = [[self.title stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+        NSString *escapedArtist = [[self.artist stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
         
-        [ffmpegCmd appendFormat:@" -metadata title='%@'", escapedTitle ?: @""];
-        [ffmpegCmd appendFormat:@" -metadata artist='%@'", escapedArtist ?: @""];
+        [ffmpegCmd appendFormat:@" -metadata title=\"%@\"", escapedTitle ?: @""];
+        [ffmpegCmd appendFormat:@" -metadata artist=\"%@\"", escapedArtist ?: @""];
         
         // ID3v2 version for better compatibility
         [ffmpegCmd appendString:@" -id3v2_version 3"];
         
-        // Output file
-        [ffmpegCmd appendFormat:@" -y %@", outputURL.path];
+        // Output file - quote the path
+        [ffmpegCmd appendFormat:@" -y \"%@\"", outputURL.path];
         
         returnCode = [MobileFFmpeg execute:ffmpegCmd];
         

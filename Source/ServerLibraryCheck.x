@@ -140,14 +140,23 @@ static BOOL YTMU(NSString *key) {
     
     // Fetch tracks on load
     [ServerLibraryChecker fetchTracksWithCompletion:nil];
+    
+    // Register for track change notifications
+    [[NSNotificationCenter defaultCenter] addObserver:self 
+                                             selector:@selector(updateServerCheckIndicator) 
+                                                 name:@"ServerLibraryCheckUpdate" 
+                                               object:nil];
 }
 
-- (void)viewDidAppear:(BOOL)animated {
+- (void)viewWillAppear:(BOOL)animated {
     %orig;
     
     if (!YTMU(@"YTMUltimateIsEnabled")) return;
     
-    [self updateServerCheckIndicator];
+    // Delay to ensure player data is available
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self updateServerCheckIndicator];
+    });
 }
 
 %new
@@ -164,7 +173,9 @@ static BOOL YTMU(NSString *key) {
     NSString *title = playerResponse.playerData.videoDetails.title;
     NSString *artist = playerResponse.playerData.videoDetails.author;
     
-    YTMNowPlayingView *nowPlayingView = [self valueForKey:@"_nowPlayingView"];
+    if (!title || title.length == 0) return;
+    
+    UIView *nowPlayingView = self.view;
     if (!nowPlayingView) return;
     
     // Remove existing indicator
@@ -176,11 +187,11 @@ static BOOL YTMU(NSString *key) {
             BOOL inLibrary = [ServerLibraryChecker isTrackInLibrary:title artist:artist];
             
             if (!inLibrary) {
-                // Create indicator - small red dot with cloud icon
+                // Create indicator - small red circle with cloud icon
                 UIView *indicator = [[UIView alloc] init];
                 indicator.tag = SERVER_CHECK_INDICATOR_TAG;
                 indicator.backgroundColor = [[UIColor systemRedColor] colorWithAlphaComponent:0.9];
-                indicator.layer.cornerRadius = 12;
+                indicator.layer.cornerRadius = 14;
                 indicator.translatesAutoresizingMaskIntoConstraints = NO;
                 
                 UIImageView *iconView = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"icloud.slash"]];
@@ -192,15 +203,15 @@ static BOOL YTMU(NSString *key) {
                 [nowPlayingView addSubview:indicator];
                 
                 [NSLayoutConstraint activateConstraints:@[
-                    [indicator.topAnchor constraintEqualToAnchor:nowPlayingView.safeAreaLayoutGuide.topAnchor constant:8],
-                    [indicator.trailingAnchor constraintEqualToAnchor:nowPlayingView.trailingAnchor constant:-16],
-                    [indicator.widthAnchor constraintEqualToConstant:24],
-                    [indicator.heightAnchor constraintEqualToConstant:24],
+                    [indicator.topAnchor constraintEqualToAnchor:nowPlayingView.safeAreaLayoutGuide.topAnchor constant:60],
+                    [indicator.leadingAnchor constraintEqualToAnchor:nowPlayingView.leadingAnchor constant:16],
+                    [indicator.widthAnchor constraintEqualToConstant:28],
+                    [indicator.heightAnchor constraintEqualToConstant:28],
                     
                     [iconView.centerXAnchor constraintEqualToAnchor:indicator.centerXAnchor],
                     [iconView.centerYAnchor constraintEqualToAnchor:indicator.centerYAnchor],
-                    [iconView.widthAnchor constraintEqualToConstant:14],
-                    [iconView.heightAnchor constraintEqualToConstant:14]
+                    [iconView.widthAnchor constraintEqualToConstant:16],
+                    [iconView.heightAnchor constraintEqualToConstant:16]
                 ]];
             }
         });
@@ -218,11 +229,8 @@ static BOOL YTMU(NSString *key) {
     if (!YTMU(@"YTMUltimateIsEnabled")) return;
     
     // Delay slightly to ensure playerResponse is updated
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        YTMNowPlayingViewController *nowPlayingVC = (YTMNowPlayingViewController *)[self valueForKey:@"_nowPlayingViewController"];
-        if ([nowPlayingVC respondsToSelector:@selector(updateServerCheckIndicator)]) {
-            [nowPlayingVC updateServerCheckIndicator];
-        }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"ServerLibraryCheckUpdate" object:nil];
     });
 }
 
