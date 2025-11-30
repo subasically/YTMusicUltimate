@@ -111,15 +111,26 @@ static BOOL YTMU(NSString *key) {
     return [cleaned stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 }
 
++ (NSString *)removeDiacritics:(NSString *)string {
+    if (!string || string.length == 0) return @"";
+    // Use Unicode decomposition to separate base characters from combining marks
+    // Then remove the combining marks (diacritics)
+    NSMutableString *result = [NSMutableString stringWithString:[string decomposedStringWithCanonicalMapping]];
+    // Remove all combining diacritical marks (Unicode range 0x0300-0x036F)
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"[\u0300-\u036F]" options:0 error:nil];
+    [regex replaceMatchesInString:result options:0 range:NSMakeRange(0, result.length) withTemplate:@""];
+    return result;
+}
+
 + (BOOL)isTrackInLibrary:(NSString *)title artist:(NSString *)artist {
     if (!cachedTracks || cachedTracks.count == 0) return YES; // Assume exists if no cache
     
-    NSString *cleanedTitle = [[self cleanTitle:title] lowercaseString];
-    NSString *normalizedArtist = [artist lowercaseString] ?: @"";
+    NSString *cleanedTitle = [self removeDiacritics:[[self cleanTitle:title] lowercaseString]];
+    NSString *normalizedArtist = [self removeDiacritics:[artist lowercaseString]] ?: @"";
     
     for (NSDictionary *track in cachedTracks) {
-        NSString *trackTitle = [[track[@"title"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        NSString *trackArtist = [[track[@"artist"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSString *trackTitle = [self removeDiacritics:[[track[@"title"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+        NSString *trackArtist = [self removeDiacritics:[[track[@"artist"] ?: @"" lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
         
         // Exact title + artist match
         if ([trackTitle isEqualToString:cleanedTitle]) {
