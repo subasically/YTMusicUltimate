@@ -1,9 +1,205 @@
 #import "FFMpegDownloader.h"
+#import "YTMUMetadataProbe.h"
 
 @implementation FFMpegDownloader {
 
     Statistics *statistics;
 
+}
+
+- (NSDictionary *)ytmuSettings {
+    NSDictionary *settings = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
+    return [settings isKindOfClass:[NSDictionary class]] ? settings : @{};
+}
+
+- (BOOL)metadataLoggingEnabled {
+    id configuredValue = [self ytmuSettings][@"ntfyMetadataLogging"];
+    if ([configuredValue respondsToSelector:@selector(boolValue)]) {
+        return [configuredValue boolValue];
+    }
+
+    return YES;
+}
+
+- (NSString *)trimmedStringValue:(id)value {
+    if (![value isKindOfClass:[NSString class]]) return nil;
+
+    NSString *trimmed = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return trimmed.length > 0 ? trimmed : nil;
+}
+
+- (NSString *)lyricsPreview {
+    NSString *lyrics = [self trimmedStringValue:self.lyrics];
+    if (lyrics.length == 0) return @"<none>";
+
+    if (lyrics.length <= 200) return lyrics;
+    return [[lyrics substringToIndex:200] stringByAppendingString:@"..."];
+}
+
+- (NSString *)commentPreviewForLog {
+    NSString *c = [self trimmedStringValue:self.comment];
+    if (c.length == 0) return @"<none>";
+    if (c.length <= 120) return c;
+    return [[c substringToIndex:120] stringByAppendingString:@"..."];
+}
+
+- (NSString *)uploadEndpointString {
+    NSDictionary *settings = [self ytmuSettings];
+    return [self trimmedStringValue:settings[@"uploadEndpoint"]] ?: @"https://radio-v2.subasically.me/api/upload";
+}
+
+- (BOOL)shouldPostNtfyForTitle:(NSString *)title body:(NSString *)body {
+    NSString *normalized = (title ?: @"").lowercaseString;
+    return [normalized rangeOfString:@"error"].location != NSNotFound || [normalized rangeOfString:@"warn"].location != NSNotFound;
+}
+
+- (NSString *)uploadResponsePreviewFromData:(NSData *)data {
+    if (data.length == 0) return nil;
+
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *trimmed = [self trimmedStringValue:text];
+    if (trimmed.length == 0) return nil;
+
+    if (trimmed.length > 1000) {
+        return [[trimmed substringToIndex:1000] stringByAppendingString:@"..."];
+    }
+    return trimmed;
+}
+
+- (void)logUploadErrorWithEndpoint:(NSString *)endpoint
+                           fileURL:(NSURL *)fileURL
+                          fileSize:(NSUInteger)fileSize
+                        statusCode:(NSInteger)statusCode
+                             detail:(NSString *)detail
+                       errorMessage:(NSString *)errorMessage
+                       responseData:(NSData *)responseData {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    [lines addObject:@"phase: upload-error"];
+    [lines addObject:[NSString stringWithFormat:@"endpoint: %@", endpoint ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"file: %@", fileURL.lastPathComponent ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"file_bytes: %lu", (unsigned long)fileSize]];
+    [lines addObject:[NSString stringWithFormat:@"title: %@", [self trimmedStringValue:self.title] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"artist: %@", [self trimmedStringValue:self.artist] ?: @"<none>"]];
+    if (statusCode > 0) {
+        [lines addObject:[NSString stringWithFormat:@"status_code: %ld", (long)statusCode]];
+    }
+    if (detail.length > 0) {
+        [lines addObject:[NSString stringWithFormat:@"detail: %@", detail]];
+    }
+    if (errorMessage.length > 0) {
+        [lines addObject:[NSString stringWithFormat:@"error: %@", errorMessage]];
+    }
+    NSString *responsePreview = [self uploadResponsePreviewFromData:responseData];
+    if (responsePreview.length > 0) {
+        [lines addObject:@"response:"];
+        [lines addObject:responsePreview];
+    }
+
+    NSString *body = [lines componentsJoinedByString:@"\n"];
+    NSLog(@"[YTMU] Upload error\n%@", body);
+    [self postMetadataLogToNtfyWithTitle:@"YTMU upload-error" body:body];
+}
+
+- (NSString *)metadataLogBodyForPhase:(NSString *)phase hasCover:(BOOL)hasCover outputURL:(NSURL *)outputURL {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    [lines addObject:[NSString stringWithFormat:@"phase: %@", phase ?: @"unknown"]];
+    [lines addObject:[NSString stringWithFormat:@"file: %@", outputURL.lastPathComponent ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"title: %@", [self trimmedStringValue:self.title] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"artist: %@", [self trimmedStringValue:self.artist] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"album: %@", [self trimmedStringValue:self.album] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"album_artist: %@", [self trimmedStringValue:self.albumArtist] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"composer: %@", [self trimmedStringValue:self.composer] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"track: %@", [self trimmedStringValue:self.track] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"disc: %@", [self trimmedStringValue:self.disc] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"genre: %@", [self trimmedStringValue:self.genre] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"date: %@", [self trimmedStringValue:self.date] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"lyrics: %@", [self lyricsPreview]]];
+    [lines addObject:[NSString stringWithFormat:@"comment: %@", [self commentPreviewForLog]]];
+    [lines addObject:[NSString stringWithFormat:@"copyright: %@", [self trimmedStringValue:self.copyright] ?: @"<none>"]];
+    [lines addObject:[NSString stringWithFormat:@"cover_embedded: %@", hasCover ? @"yes" : @"no"]];
+    [lines addObject:[NSString stringWithFormat:@"duration_seconds: %ld", (long)self.duration]];
+    [lines addObject:[NSString stringWithFormat:@"format: %@", outputURL.pathExtension.lowercaseString ?: @"<unknown>"]];
+    if ([phase isEqualToString:@"discovery"]) {
+        if (self.metadataDiscoveryReport.length > 0) {
+            [lines addObject:@""];
+            [lines addObject:@"candidate_paths:"];
+            [lines addObject:self.metadataDiscoveryReport];
+        }
+        NSString *probeAppendix = YTMUMetadataProbeDiscoveryAppendixForVideoId(self.tempName);
+        if (probeAppendix.length > 0) {
+            [lines addObject:@""];
+            [lines addObject:probeAppendix];
+        }
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+- (void)postMetadataLogToNtfyWithTitle:(NSString *)title body:(NSString *)body {
+    NSDictionary *settings = [self ytmuSettings];
+    if (![self metadataLoggingEnabled]) return;
+    if (![self shouldPostNtfyForTitle:title body:body]) return;
+
+    NSString *topic = [self trimmedStringValue:settings[@"ntfyTopic"]] ?: @"ytmusicultimate";
+
+    NSString *server = [self trimmedStringValue:settings[@"ntfyServer"]] ?: @"https://ntfy.subasically.me";
+    NSString *baseURL = [server hasSuffix:@"/"] ? [server substringToIndex:server.length - 1] : server;
+    NSString *urlString = [NSString stringWithFormat:@"%@/%@", baseURL, topic];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) return;
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    request.timeoutInterval = 10;
+    request.HTTPBody = [body dataUsingEncoding:NSUTF8StringEncoding];
+    [request setValue:@"text/plain; charset=utf-8" forHTTPHeaderField:@"Content-Type"];
+    [request setValue:title forHTTPHeaderField:@"Title"];
+
+    NSString *token = [self trimmedStringValue:settings[@"ntfyToken"]];
+    if (token.length > 0) {
+        [request setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
+    }
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(__unused NSData *data, NSURLResponse *response, NSError *error) {
+        if (error) {
+            NSLog(@"[YTMU] ntfy metadata log failed: %@", error.localizedDescription);
+            return;
+        }
+
+        NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+        if (statusCode < 200 || statusCode >= 300) {
+            NSLog(@"[YTMU] ntfy metadata log returned HTTP %ld", (long)statusCode);
+        }
+    }] resume];
+}
+
+- (void)logMetadataPhase:(NSString *)phase hasCover:(BOOL)hasCover outputURL:(NSURL *)outputURL {
+    NSString *body = [self metadataLogBodyForPhase:phase hasCover:hasCover outputURL:outputURL];
+    NSLog(@"[YTMU] Metadata %@\n%@", phase, body);
+    [self postMetadataLogToNtfyWithTitle:[NSString stringWithFormat:@"YTMU %@", phase] body:body];
+}
+
+- (NSString *)escapedMetadataValue:(NSString *)value {
+    if (![value isKindOfClass:[NSString class]] || value.length == 0) return @"";
+
+    if (value.length > 8192) {
+        value = [value substringToIndex:8192];
+    }
+
+    NSString *escaped = [[value stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+                         stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    escaped = [[escaped stringByReplacingOccurrencesOfString:@"\r\n" withString:@" "]
+               stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+
+    return [escaped stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)appendMetadataIfPresent:(NSMutableString *)cmd key:(NSString *)key value:(NSString *)value {
+    NSString *escaped = [self escapedMetadataValue:value];
+    if (escaped.length == 0) {
+        return;
+    }
+    [cmd appendFormat:@" -metadata %@=\"%@\"", key, escaped];
 }
 
 - (void)statisticsCallback:(Statistics *)newStatistics {
@@ -90,13 +286,13 @@
     NSURL *documentsURL = [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] lastObject];
     NSURL *tempAudioURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_temp.m4a", self.tempName]];
     NSURL *tempCoverURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@_cover.jpg", self.tempName]];
-    
+
     // Use readable filename for upload: "Artist - Title.m4a"
-    NSString *safeMediaName = [[[self.mediaName stringByReplacingOccurrencesOfString:@":" withString:@"-"] 
+    NSString *safeMediaName = [[[self.mediaName stringByReplacingOccurrencesOfString:@":" withString:@"-"]
                                stringByReplacingOccurrencesOfString:@"\"" withString:@""]
                                stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
     NSURL *outputURL = [documentsURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.m4a", safeMediaName]];
-    
+
     [[NSFileManager defaultManager] removeItemAtURL:tempAudioURL error:nil];
     [[NSFileManager defaultManager] removeItemAtURL:tempCoverURL error:nil];
     [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
@@ -119,7 +315,7 @@
         NSLog(@"[YTMU] Download command: %@", downloadCmd);
         int returnCode = [MobileFFmpeg execute:downloadCmd];
         NSLog(@"[YTMU] Download return code: %d", returnCode);
-        
+
         if (returnCode != RETURN_CODE_SUCCESS) {
             NSString *output = [MobileFFmpegConfig getLastCommandOutput];
             NSLog(@"[YTMU] Download failed output: %@", output);
@@ -130,53 +326,75 @@
             });
             return;
         }
-        
+
         dispatch_async(dispatch_get_main_queue(), ^{
             self.hud.label.text = @"Processing...";
         });
-        
-        // Build FFmpeg command - just add metadata and cover to M4A (no transcoding needed)
+
+        // Build FFmpeg command - keep AAC audio, embed metadata, and attach artwork when available.
         NSMutableString *ffmpegCmd = [NSMutableString string];
-        
+
         // Input audio
         [ffmpegCmd appendFormat:@"-i \"%@\"", tempAudioURL.path];
-        
+
         // Input cover if exists
         BOOL hasCover = [[NSFileManager defaultManager] fileExistsAtPath:tempCoverURL.path];
         if (hasCover) {
             [ffmpegCmd appendFormat:@" -i \"%@\"", tempCoverURL.path];
         }
-        
+
         // Map streams
         [ffmpegCmd appendString:@" -map 0:a"];
         if (hasCover) {
             [ffmpegCmd appendString:@" -map 1:0"];
         }
-        
-        // Copy audio codec (no transcoding), set cover disposition
+
+        // Keep the original AAC stream and attach cover art when available.
         [ffmpegCmd appendString:@" -c:a copy"];
         if (hasCover) {
             [ffmpegCmd appendString:@" -c:v mjpeg -disposition:v attached_pic"];
         }
-        
-        // Metadata
-        NSString *escapedTitle = [[self.title stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""] ?: @"";
-        NSString *escapedArtist = [[self.artist stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""] ?: @"";
-        
+
+        // Metadata (MP4/M4A atoms via FFmpeg; omit empty tags)
+        NSString *escapedTitle = [self escapedMetadataValue:self.title];
+        NSString *escapedArtist = [self escapedMetadataValue:self.artist];
+        NSString *escapedAlbum = [self escapedMetadataValue:self.album];
+        NSString *escapedGenre = [self escapedMetadataValue:self.genre];
+        NSString *escapedDate = [self escapedMetadataValue:self.date];
+        NSString *escapedLyrics = [self escapedMetadataValue:self.lyrics];
+
         [ffmpegCmd appendFormat:@" -metadata title=\"%@\"", escapedTitle];
         [ffmpegCmd appendFormat:@" -metadata artist=\"%@\"", escapedArtist];
-        
-        // Output file
+        if (escapedAlbum.length > 0) {
+            [ffmpegCmd appendFormat:@" -metadata album=\"%@\"", escapedAlbum];
+        }
+        [self appendMetadataIfPresent:ffmpegCmd key:@"album_artist" value:self.albumArtist];
+        [self appendMetadataIfPresent:ffmpegCmd key:@"composer" value:self.composer];
+        [self appendMetadataIfPresent:ffmpegCmd key:@"track" value:self.track];
+        [self appendMetadataIfPresent:ffmpegCmd key:@"disc" value:self.disc];
+        if (escapedGenre.length > 0) {
+            [ffmpegCmd appendFormat:@" -metadata genre=\"%@\"", escapedGenre];
+        }
+        if (escapedDate.length > 0) {
+            [ffmpegCmd appendFormat:@" -metadata date=\"%@\" -metadata year=\"%@\"", escapedDate, escapedDate];
+        }
+        if (escapedLyrics.length > 0) {
+            [ffmpegCmd appendFormat:@" -metadata lyrics=\"%@\"", escapedLyrics];
+        }
+        [self appendMetadataIfPresent:ffmpegCmd key:@"comment" value:self.comment];
+        [self appendMetadataIfPresent:ffmpegCmd key:@"copyright" value:self.copyright];
+
+        // Output file (discovery / fetched logs run when the track activates; see YTMULogFetchedMetadataSnapshotForPlayer)
         [ffmpegCmd appendFormat:@" -y \"%@\"", outputURL.path];
-        
+
         NSLog(@"[YTMU] Convert command: %@", ffmpegCmd);
         returnCode = [MobileFFmpeg execute:ffmpegCmd];
         NSLog(@"[YTMU] Convert return code: %d", returnCode);
-        
+
         // Clean up temp files
         [[NSFileManager defaultManager] removeItemAtURL:tempAudioURL error:nil];
         [[NSFileManager defaultManager] removeItemAtURL:tempCoverURL error:nil];
-        
+
         if (returnCode != RETURN_CODE_SUCCESS) {
             NSString *output = [MobileFFmpegConfig getLastCommandOutput];
             NSLog(@"[YTMU] Convert failed output: %@", output);
@@ -187,29 +405,31 @@
             });
             return;
         }
-        
+
+        [self logMetadataPhase:@"embedded" hasCover:hasCover outputURL:outputURL];
+
         // Upload to server
         dispatch_async(dispatch_get_main_queue(), ^{
             self.hud.mode = MBProgressHUDModeIndeterminate;
             self.hud.label.text = @"Uploading...";
         });
-        
+
         [self uploadFileToServer:outputURL completion:^(BOOL success, NSString *message) {
             // Clean up the output file after upload
             [[NSFileManager defaultManager] removeItemAtURL:outputURL error:nil];
-            
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self.hud hideAnimated:YES];
-                
+
                 self.hud = [MBProgressHUD showHUDAddedTo:[UIApplication sharedApplication].keyWindow animated:YES];
                 self.hud.mode = MBProgressHUDModeCustomView;
-                
+
                 if (success) {
                     self.hud.label.text = message ?: @"Uploaded!";
                     UIImageView *checkmarkImageView = [[UIImageView alloc] initWithImage:[self imageWithSystemIconNamed:@"checkmark"]];
                     checkmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
                     self.hud.customView = checkmarkImageView;
-                    
+
                     // Refresh library cache and update indicator after successful upload
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         // Force refresh the cache by clearing it
@@ -222,7 +442,7 @@
                     xmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
                     self.hud.customView = xmarkImageView;
                 }
-                
+
                 [self.hud hideAnimated:YES afterDelay:3.0];
             });
         }];
@@ -230,52 +450,88 @@
 }
 
 - (void)uploadFileToServer:(NSURL *)fileURL completion:(void (^)(BOOL success, NSString *message))completion {
-    NSString *uploadURLString = @"http://62.146.177.62:8080/api/upload";
+    NSString *uploadURLString = [self uploadEndpointString];
     NSString *apiKey = @"4CBpvrymhCyzJ/+XgD3DzBtZKTlCvFoqCRiEZBwe238=";
-    
+
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
     if (!fileData) {
         NSLog(@"[YTMU] Failed to read file at: %@", fileURL.path);
+        [self logUploadErrorWithEndpoint:uploadURLString
+                                 fileURL:fileURL
+                                fileSize:0
+                              statusCode:0
+                                  detail:@"failed to read file before upload"
+                            errorMessage:nil
+                            responseData:nil];
         completion(NO, @"Failed to read file");
         return;
     }
-    
+
     NSLog(@"[YTMU] Uploading file: %@ (%lu bytes)", fileURL.lastPathComponent, (unsigned long)fileData.length);
-    
+    NSLog(@"[YTMU] Upload endpoint: %@", uploadURLString);
+
     NSString *filename = [fileURL lastPathComponent];
     NSString *boundary = [NSString stringWithFormat:@"----FormBoundary%@", [[NSUUID UUID] UUIDString]];
-    
+
     // Determine content type based on file extension
     NSString *contentType = @"audio/mp4";
     if ([filename.pathExtension.lowercaseString isEqualToString:@"mp3"]) {
         contentType = @"audio/mpeg";
     }
-    
+
     NSMutableData *body = [NSMutableData data];
     [body appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\n", filename] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", contentType] dataUsingEncoding:NSUTF8StringEncoding]];
     [body appendData:fileData];
     [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:uploadURLString]];
+
+    NSURL *uploadURL = [NSURL URLWithString:uploadURLString];
+    if (!uploadURL) {
+        [self logUploadErrorWithEndpoint:uploadURLString
+                                 fileURL:fileURL
+                                fileSize:fileData.length
+                              statusCode:0
+                                  detail:@"invalid upload endpoint"
+                            errorMessage:nil
+                            responseData:nil];
+        completion(NO, @"Invalid upload endpoint");
+        return;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:uploadURL];
     request.HTTPMethod = @"POST";
+    request.timeoutInterval = 120;
     [request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary] forHTTPHeaderField:@"Content-Type"];
     [request setValue:apiKey forHTTPHeaderField:@"X-API-Key"];
     request.HTTPBody = body;
-    
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+
+    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+    configuration.timeoutIntervalForRequest = 120;
+    configuration.timeoutIntervalForResource = 600;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        [session finishTasksAndInvalidate];
+
         if (error) {
+            [self logUploadErrorWithEndpoint:uploadURLString
+                                     fileURL:fileURL
+                                    fileSize:fileData.length
+                                  statusCode:[(NSHTTPURLResponse *)response statusCode]
+                                      detail:@"upload request failed"
+                                errorMessage:error.localizedDescription
+                                responseData:data];
             completion(NO, error.localizedDescription);
             return;
         }
-        
+
         NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
-        
+
         if (data) {
             NSError *jsonError;
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-            
+
             if (json) {
                 // Check for "File already exists" message
                 NSString *message = json[@"message"];
@@ -283,21 +539,35 @@
                     completion(YES, @"Already exists");
                     return;
                 }
-                
+
                 if ([json[@"success"] boolValue] == NO && message) {
+                    [self logUploadErrorWithEndpoint:uploadURLString
+                                             fileURL:fileURL
+                                            fileSize:fileData.length
+                                          statusCode:httpResponse.statusCode
+                                              detail:@"upload API returned success=false"
+                                        errorMessage:message
+                                        responseData:data];
                     completion(NO, message);
                     return;
                 }
             }
         }
-        
+
         if (httpResponse.statusCode >= 200 && httpResponse.statusCode < 300) {
             completion(YES, nil);
         } else {
+            [self logUploadErrorWithEndpoint:uploadURLString
+                                     fileURL:fileURL
+                                    fileSize:fileData.length
+                                  statusCode:httpResponse.statusCode
+                                      detail:@"upload API returned non-2xx status"
+                                errorMessage:nil
+                                responseData:data];
             completion(NO, [NSString stringWithFormat:@"HTTP %ld", (long)httpResponse.statusCode]);
         }
     }];
-    
+
     [task resume];
 }
 
@@ -307,11 +577,11 @@
     self.hud.mode = MBProgressHUDModeCustomView;
     self.hud.label.text = message;
     self.hud.label.numberOfLines = 0;
-    
+
     UIImageView *xmarkImageView = [[UIImageView alloc] initWithImage:[self imageWithSystemIconNamed:@"xmark"]];
     xmarkImageView.contentMode = UIViewContentModeScaleAspectFit;
     self.hud.customView = xmarkImageView;
-    
+
     [self.hud hideAnimated:YES afterDelay:3.0];
 }
 

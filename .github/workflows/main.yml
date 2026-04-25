@@ -1,7 +1,7 @@
 name: Build and Release YTMusicUltimate
 on:
   workflow_dispatch:
-    inputs: 
+    inputs:
       ipa_url:
         description: "URL to the decrypted IPA file"
         default: ""
@@ -46,7 +46,7 @@ jobs:
       - name: Validate IPA URL
         run: |
           curl -L -r 0-1023 -o sample.part "${{ inputs.ipa_url }}" > /dev/null 2>&1
-          
+
           file_type=$(file --mime-type -b sample.part)
 
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
@@ -61,6 +61,11 @@ jobs:
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
           echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+
+      - name: Set build timestamp
+        run: |
+          echo "BUILD_TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+          echo "IPA_NAME=YTMusicUltimate-${BUILD_TIMESTAMP}.ipa" >> $GITHUB_ENV
 
       - name: Cache Theos
         id: theos
@@ -103,13 +108,19 @@ jobs:
           mv packages/*.deb ../ytmult.deb
 
       - name: Inject tweak into provided IPA
-        run: cyan -i ytm.ipa -o YTMusicUltimate.ipa -uwsf ytmult.deb -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }} 
+        run: cyan -i ytm.ipa -o "${{ env.IPA_NAME }}" -uwsf ytmult.deb -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }}
+
+      - name: Patch ATS For Server Access
+        run: ./main/scripts/patch_ipa_ats.sh "${{ env.IPA_NAME }}"
+
+      - name: Run Regression Checks
+        run: python3 ./main/scripts/regression_checks.py --ipa "${{ env.IPA_NAME }}"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2.5.0
         with:
           name: YTMusicUltimate (${{ github.run_number }})
-          files: YTMusicUltimate.ipa
+          files: ${{ env.IPA_NAME }}
           draft: true
 
       - name: Output Release URL
