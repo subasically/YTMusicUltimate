@@ -1,0 +1,86 @@
+hook: YTMWatchViewController.viewDidAppear
+video_id: E7Y_83g9ohM
+queue_longBylineText: Tea Tairovic • 3:01
+queue_shortBylineText: Tea Tairovic
+queue_title: Pozovi
+queue_album: <none>
+queue_date: <none>
+musicAttributesClass: YTIVideoMusicAttributes
+
+--- musicAttributes dump (YTIVideoMusicAttributes) ---
+musicAttrs.nowPlayingIndicatorAnimationSpeed -> 1
+musicAttrs.hasNowPlayingIndicatorAnimationSpeed -> 1
+musicAttrs.isExplicit -> 0
+musicAttrs.hasIsExplicit -> 0
+musicAttrs.yt_veType -> 0
+musicAttrs.yt_veCounter -> 0
+musicAttrs.yt_shouldAttachChildProtos -> 0
+musicAttrs.hash -> 92874411136
+musicAttrs.superclass = <GPBMessage>
+musicAttrs.superclass.hash -> 4525450200
+musicAttrs.superclass.superclass = <NSObject>
+musicAttrs.initialized -> 1
+
+--- queueItem dump (YTQueueItem) ---
+queueItem.localID -> F97D404B-0D9D-4502-9028-F0C15998CDDF
+queueItem.videoRenderer = <YTIPlaylistPanelVideoRenderer>
+queueItem.videoRenderer.hash -> 11911167313114483310
+queueItem.videoRenderer.superclass = <GPBMessage>
+queueItem.videoRenderer.title = <YTIFormattedString>
+queueItem.videoRenderer.hasTitle -> 1
+queueItem.videoRenderer.longBylineText = <YTIFormattedString>
+queueItem.videoRenderer.hasLongBylineText -> 1
+queueItem.videoRenderer.shortBylineText = <YTIFormattedString>
+queueItem.videoRenderer.hasShortBylineText -> 1
+queueItem.videoRenderer.thumbnail = <YTIThumbnailDetails>
+queueItem.videoRenderer.hasThumbnail -> 1
+queueItem.videoRenderer.lengthText = <YTIFormattedString>
+queueItem.videoRenderer.hasLengthText -> 1
+queueItem.videoRenderer.thumbnailOverlaysArray = <GPBAutocreatedArray>
+queueItem.videoRenderer.thumbnailOverlaysArray_Count -> 0
+queueItem.videoRenderer.channelAvatar = <YTIThumbnailDetails>
+queueItem.videoRenderer.hasChannelAvatar -> 0
+queueItem.videoRenderer.indexText = <YTIFormattedString>
+queueItem.videoRenderer.hasIndexText -> 0
+queueItem.videoRenderer.selected -> 0
+queueItem.videoRenderer.hasSelected -> 1
+queueItem.videoRenderer.navigationEndpoint = <YTICommand>
+queueItem.videoRenderer.hasNavigationEndpoint -> 1
+queueItem.videoRenderer.viewCountText = <YTIFormattedString>
+queueItem.videoRenderer.hasViewCountText -> 0
+queueItem.videoRenderer.shortViewCountText = <YTIFormattedString>
+queueItem.videoRenderer.hasShortViewCountText -> 0
+queueItem.videoRenderer.unplayableText = <YTIFormattedString>
+queueItem.videoRenderer.hasUnplayableText -> 0
+queueItem.videoRenderer.videoId -> E7Y_83g9ohM
+queueItem.videoRenderer.hasVideoId -> 1
+queueItem.videoRenderer.badgesArray = <GPBAutocreatedArray>
+queueItem.videoRenderer.badgesArray_Count -> 0
+queueItem.videoRenderer.thumbnailBadgesArray = <GPBAutocreatedArray>
+queueItem.videoRenderer.thumbnailBadgesArray_Count -> 0
+queueItem.videoRenderer.standaloneBadge = <YTIStandaloneBadgeSupportedRenderers>
+queueItem.videoRenderer.hasStandaloneBadge -> 0
+queueItem.videoRenderer.topStandaloneBadge = <YTIStandaloneBadgeSupportedRenderers>
+queueItem.videoRenderer.hasTopStandaloneBadge -> 0
+queueItem.videoRenderer.serviceEndpointsArray = <GPBAutocreatedArray>
+queueItem.videoRenderer.serviceEndpointsArray_Count -> 0
+queueItem.videoRenderer.menu = <YTIMenuSupportedRenderers>
+queueItem.videoRenderer.hasMenu -> 1
+queueItem.videoRenderer.swipeButtonsArray = <GPBAutocreatedArray>
+queueItem.videoRenderer.swipeButtonsArray_Count -> 0
+queueItem.videoRenderer.onSwipeLeftCommand = <YTICommand>
+queueItem.videoRenderer.hasOnSwipeLeftCommand -> 0
+queueItem.videoRenderer.onItemRemovedCommand = <YTICommand>
+queueItem.videoRenderer.hasOnItemRemovedCommand -> 0
+queueItem.videoRenderer.queueNavigationEndpoint = <YTICommand>
+queueItem.videoRenderer.hasQueueNavigationEndpoint -> 1
+queueItem.videoRenderer.playlistSetVideoId -> 56B44F6D10557CC6
+queueItem.videoRenderer.hasPlaylistSetVideoId -> 1
+queueItem.videoRenderer.visualElement = <YTAYouTubeVisualElementProto>
+queueItem.videoRenderer.hasVisualElement -> 0
+queueItem.videoRenderer.trackingParams = <_NSInlineData>
+queueItem.videoRenderer.hasTrackingParams -> 1
+queueItem.videoRenderer.offlineability = <YTIPlaylistPanelVideoOfflineabilitySupportedRenderers>
+queueItem.videoRenderer.hasOfflineability -> 0
+pr_album: <none>
+pr_date: <none>
