@@ -3,6 +3,9 @@ import argparse
 import json
 import plistlib
 import sys
+import pathlib
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 import zipfile
@@ -70,17 +73,42 @@ def run_exists_api_regressions():
         raise AssertionError("; ".join(failures))
 
 
-def verify_ats_in_ipa(ipa_path: str):
+def run_upload_regressions():
+    root = pathlib.Path(__file__).resolve().parents[1]
+    artifact_dir = root / "data" / "ytmusicultimate-v3-switch"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=artifact_dir) as temporary:
+        executable = str(pathlib.Path(temporary) / "server-upload-tests")
+        subprocess.run([
+            "xcrun", "clang", "-fobjc-arc", "-framework", "Foundation",
+            "-I", str(root / "Source"), str(root / "Source/YTMUServerUpload.m"),
+            str(root / "tests/server_upload_tests.m"), "-o", executable,
+        ], check=True)
+        subprocess.run([executable], check=True)
+
+
+def verify_secure_defaults_in_ipa(ipa_path: str):
     with zipfile.ZipFile(ipa_path) as zf:
         plist_name = next(name for name in zf.namelist() if name.startswith("Payload/") and name.endswith(".app/Info.plist"))
         with zf.open(plist_name) as fp:
             info = plistlib.load(fp)
+        dylib_name = next(name for name in zf.namelist() if name.endswith("/YTMusicUltimate.dylib"))
+        dylib = zf.read(dylib_name)
 
     ats = info.get("NSAppTransportSecurity", {})
     exceptions = ats.get("NSExceptionDomains", {})
-    target = exceptions.get("62.146.177.62", {})
-    if not ats.get("NSAllowsArbitraryLoads") or not target.get("NSExceptionAllowsInsecureHTTPLoads"):
-        raise AssertionError("ATS exception for 62.146.177.62 missing from built IPA")
+    if ats.get("NSAllowsArbitraryLoads"):
+        raise AssertionError("Built IPA enables global arbitrary loads")
+    if "62.146.177.62" in exceptions:
+        raise AssertionError("Built IPA contains the retired VPS ATS exception")
+    for host in ("radio.subasically.me", "radio-v2.subasically.me"):
+        exception = exceptions.get(host, {})
+        if exception.get("NSExceptionAllowsInsecureHTTPLoads") or exception.get("NSTemporaryExceptionAllowsInsecureHTTPLoads"):
+            raise AssertionError("Built IPA permits insecure radio HTTP loads")
+    if b"https://radio.subasically.me" not in dylib or b"me.subasically.ytmusicultimate.server-upload" not in dylib:
+        raise AssertionError("Built tweak is missing secure V3 defaults or Keychain service")
+    if info.get("CFBundleIdentifier") != "com.google.ios.youtubemusic":
+        raise AssertionError("Built IPA changed the original bundle ID")
 
 
 def probe_exists_api(api_url: str, songs):
@@ -127,15 +155,16 @@ def main():
     parser.add_argument("--ipa")
     parser.add_argument("--probe-api", action="store_true")
     parser.add_argument("--probe-exists-api", action="store_true")
-    parser.add_argument("--api-url", default="https://radio-v2.subasically.me/api/tracks/exists")
+    parser.add_argument("--api-url", default="https://radio.subasically.me/api/tracks/exists")
     args = parser.parse_args()
 
     run_exists_api_regressions()
-    print("exists_api_regressions=ok")
+    print("exists_api_regressions=ok", flush=True)
+    run_upload_regressions()
 
     if args.ipa:
-        verify_ats_in_ipa(args.ipa)
-        print(f"ats_verification=ok ipa={args.ipa}")
+        verify_secure_defaults_in_ipa(args.ipa)
+        print(f"secure_defaults_verification=ok ipa={args.ipa}")
 
     if args.probe_api or args.probe_exists_api:
         probe_exists_api(args.api_url, [

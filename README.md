@@ -57,3 +57,43 @@ If the github action works and you cannot find where you can download the result
 
 
 Made with ❤ by Ginsu and Dayanch96
+
+### Save to Server (V3)
+
+Uploads use `https://radio.subasically.me/api/upload`; library checks use
+`https://radio.subasically.me/api/tracks/exists`. Saved endpoint overrides for the
+retired V2 host at those paths migrate automatically. Other custom overrides are
+preserved and must use HTTPS.
+
+In **YTMusicUltimate → Player Settings → Save to Server → Server API key**, tap
+**Paste and Save** after copying the V3 API key. The tweak never displays the value
+or stores it in preferences: it uses the signed app's default Keychain access group,
+with storage restricted to this unlocked iPhone. The row shows only whether it is
+configured. A different signing identity/access group may require re-entry.
+Choose **Bosnian** (`bs`, the default) or **English** (`en`) for the song before
+using **Save to Server**. No language detection is performed.
+
+For a local build on a Mac with Theos, gmake, cyan, and Xcode already installed:
+
+```sh
+THEOS=/path/to/theos gmake package DEBUG=0 FINALPACKAGE=1 SIDELOADING=1
+# Copy your decrypted input IPA to input.ipa first; keep the reference untouched.
+cyan -i ./input.ipa -o ./YTMusicUltimate-v3.ipa -uwsf ./packages/com.ginsu.ytmusicultimate_2.4.1_iphoneos-arm.deb -n 'YouTube Music' -b com.google.ios.youtubemusic
+python3 scripts/regression_checks.py --ipa ./YTMusicUltimate-v3.ipa
+```
+
+The regression command runs offline Foundation tests of the actual multipart and
+upload-response helpers, then checks the IPA's secure defaults and original bundle
+ID. It preserves the source app's unrelated ATS exceptions. Cyan fake-signing is
+only assembly preparation; a signing tool must provision the app for the phone.
+
+To sideload with Sideloadly, select the built IPA, the iPhone, and the same Apple
+signing account and effective installed bundle ID as the existing installation.
+Perform an overwrite update to preserve app data; complete private signing/2FA
+prompts yourself. Unlock/trust the phone and enable Developer Mode or trust the
+signed developer if iOS requests it. After installation, paste the V3 API key in
+the setting above and verify a new upload, duplicate feedback, actionable errors,
+and the green library refresh. Relaunch and verify Keychain persistence; verify it
+again after an update signed with the same identity. Check the signing profile's
+expiration and refresh before expiry. Device signing, installation, and live server
+acceptance are separate from the local build checks.

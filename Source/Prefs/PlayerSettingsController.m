@@ -1,4 +1,6 @@
 #import "PlayerSettingsController.h"
+#import "../YTMUServerCredentials.h"
+#import "../YTMUServerUpload.h"
 
 @implementation PlayerSettingsController
 
@@ -26,7 +28,7 @@
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 4;
+    return 5;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -34,7 +36,7 @@
         return 7;
     } if (section == 2) {
         return 3;
-    } if (section == 3) {
+    } if (section == 3 || section == 4) {
         return 2;
     } else {
         return 1;
@@ -46,7 +48,14 @@
         return LOC(@"SEEK_TIME_FOOTER");
     }
 
+    if (section == 4) {
+        return @"The API key is stored in the iPhone Keychain. Choose the song’s language before saving to the V3 server.";
+    }
     return nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    return section == 4 ? @"Save to Server" : nil;
 }
 
 -(UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -196,11 +205,43 @@
         }
     }
 
+    if (indexPath.section == 4) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        if (indexPath.row == 0) {
+            cell.textLabel.text = @"Server API key";
+            cell.detailTextLabel.text = YTMUCopyServerAPIKey(NULL).length ? @"Configured" : @"Missing or unavailable";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            cell.textLabel.text = @"Upload language";
+            UISegmentedControl *language = [[UISegmentedControl alloc] initWithItems:@[@"Bosnian", @"English"]];
+            language.selectedSegmentIndex = [YTMUServerUploadLanguage(NSUserDefaults.standardUserDefaults) isEqualToString:@"en"] ? 1 : 0;
+            [language addTarget:self action:@selector(uploadLanguageSelect:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = language;
+        }
+        return cell;
+    }
+
     return cell;
 }
 
 - (BOOL)tableView:(UITableView *)tableView shouldHighlightRowAtIndexPath:(NSIndexPath *)indexPath {
-    return NO;
+    return indexPath.section == 4 && indexPath.row == 0;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 4 && indexPath.row == 0) {
+        YTMUPresentServerAPIKeyEntry(self, ^{
+            [self.tableView reloadData];
+        });
+    }
+}
+
+- (void)uploadLanguageSelect:(UISegmentedControl *)sender {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableDictionary *settings = [[defaults dictionaryForKey:@"YTMUltimate"] mutableCopy] ?: [NSMutableDictionary dictionary];
+    settings[@"uploadLanguage"] = sender.selectedSegmentIndex == 1 ? @"en" : @"bs";
+    [defaults setObject:settings forKey:@"YTMUltimate"];
 }
 
 - (void)toggleSwitch:(UISwitch *)sender {

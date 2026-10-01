@@ -1,5 +1,7 @@
 #import "FFMpegDownloader.h"
 #import "YTMUMetadataProbe.h"
+#import "YTMUServerCredentials.h"
+#import "YTMUServerUpload.h"
 
 @implementation FFMpegDownloader {
 
@@ -44,8 +46,7 @@
 }
 
 - (NSString *)uploadEndpointString {
-    NSDictionary *settings = [self ytmuSettings];
-    return [self trimmedStringValue:settings[@"uploadEndpoint"]] ?: @"https://radio-v2.subasically.me/api/upload";
+    return YTMUServerEndpoint(NSUserDefaults.standardUserDefaults, @"uploadEndpoint", @"/api/upload");
 }
 
 - (BOOL)shouldPostNtfyForTitle:(NSString *)title body:(NSString *)body {
@@ -451,7 +452,11 @@
 
 - (void)uploadFileToServer:(NSURL *)fileURL completion:(void (^)(BOOL success, NSString *message))completion {
     NSString *uploadURLString = [self uploadEndpointString];
-    NSString *apiKey = @"4CBpvrymhCyzJ/+XgD3DzBtZKTlCvFoqCRiEZBwe238=";
+    NSString *apiKey = YTMUCopyServerAPIKey(NULL);
+    if (!apiKey.length) {
+        completion(NO, @"Server API key missing or unavailable. Configure it in Player Settings.");
+        return;
+    }
 
     NSData *fileData = [NSData dataWithContentsOfURL:fileURL];
     if (!fileData) {
@@ -473,21 +478,10 @@
     NSString *filename = [fileURL lastPathComponent];
     NSString *boundary = [NSString stringWithFormat:@"----FormBoundary%@", [[NSUUID UUID] UUIDString]];
 
-    // Determine content type based on file extension
-    NSString *contentType = @"audio/mp4";
-    if ([filename.pathExtension.lowercaseString isEqualToString:@"mp3"]) {
-        contentType = @"audio/mpeg";
-    }
-
-    NSMutableData *body = [NSMutableData data];
-    [body appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\n", filename] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", contentType] dataUsingEncoding:NSUTF8StringEncoding]];
-    [body appendData:fileData];
-    [body appendData:[[NSString stringWithFormat:@"\r\n--%@--\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
+    NSData *body = YTMUServerUploadBody(fileData, filename, boundary, YTMUServerUploadLanguage(NSUserDefaults.standardUserDefaults));
 
     NSURL *uploadURL = [NSURL URLWithString:uploadURLString];
-    if (!uploadURL) {
+    if (!YTMUIsSecureServerURL(uploadURL)) {
         [self logUploadErrorWithEndpoint:uploadURLString
                                  fileURL:fileURL
                                 fileSize:fileData.length
@@ -495,7 +489,7 @@
                                   detail:@"invalid upload endpoint"
                             errorMessage:nil
                             responseData:nil];
-        completion(NO, @"Invalid upload endpoint");
+        completion(NO, @"Upload endpoint must use HTTPS without URL credentials.");
         return;
     }
 
@@ -504,71 +498,41 @@
     request.timeoutInterval = 120;
     [request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary] forHTTPHeaderField:@"Content-Type"];
     [request setValue:apiKey forHTTPHeaderField:@"X-API-Key"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     request.HTTPBody = body;
 
     NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
     configuration.timeoutIntervalForRequest = 120;
     configuration.timeoutIntervalForResource = 600;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
 
     NSURLSessionDataTask *task = [session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         [session finishTasksAndInvalidate];
 
-        if (error) {
+        // Never pass raw server/transport text containing the credential to UI or diagnostics.
+        NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+        NSString *transportMessage = YTMURedactServerCredential(error.localizedDescription, apiKey);
+        NSDictionary *result = YTMUServerUploadResult(data, statusCode);
+        BOOL success = !error && [result[@"success"] boolValue];
+        NSString *message = error ? transportMessage : YTMURedactServerCredential(result[@"message"], apiKey);
+        if (!success) {
             [self logUploadErrorWithEndpoint:uploadURLString
                                      fileURL:fileURL
                                     fileSize:fileData.length
-                                  statusCode:[(NSHTTPURLResponse *)response statusCode]
-                                      detail:@"upload request failed"
-                                errorMessage:error.localizedDescription
-                                responseData:data];
-            completion(NO, error.localizedDescription);
-            return;
+                                  statusCode:statusCode
+                                      detail:error ? @"upload request failed" : @"upload API rejected request"
+                                errorMessage:message
+                                responseData:nil];
         }
-
-        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
-
-        if (data) {
-            NSError *jsonError;
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-
-            if (json) {
-                // Check for "File already exists" message
-                NSString *message = json[@"message"];
-                if ([message isEqualToString:@"File already exists"]) {
-                    completion(YES, @"Already exists");
-                    return;
-                }
-
-                if ([json[@"success"] boolValue] == NO && message) {
-                    [self logUploadErrorWithEndpoint:uploadURLString
-                                             fileURL:fileURL
-                                            fileSize:fileData.length
-                                          statusCode:httpResponse.statusCode
-                                              detail:@"upload API returned success=false"
-                                        errorMessage:message
-                                        responseData:data];
-                    completion(NO, message);
-                    return;
-                }
-            }
-        }
-
-        if (httpResponse.statusCode >= 200 && httpResponse.statusCode < 300) {
-            completion(YES, nil);
-        } else {
-            [self logUploadErrorWithEndpoint:uploadURLString
-                                     fileURL:fileURL
-                                    fileSize:fileData.length
-                                  statusCode:httpResponse.statusCode
-                                      detail:@"upload API returned non-2xx status"
-                                errorMessage:nil
-                                responseData:data];
-            completion(NO, [NSString stringWithFormat:@"HTTP %ld", (long)httpResponse.statusCode]);
-        }
+        completion(success, message);
     }];
 
     [task resume];
+}
+
+// Reject redirects so the credential is sent only to the configured HTTPS endpoint.
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    completionHandler(nil);
 }
 
 - (void)showErrorHUD:(NSString *)message {

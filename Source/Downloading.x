@@ -16,6 +16,7 @@
 #import "Headers/ServerLibraryChecker.h"
 #import "Headers/YTPlayerViewController.h"
 #import "YTMUMetadataProbe.h"
+#import "YTMUServerCredentials.h"
 
 static BOOL YTMU(NSString *key) {
     NSDictionary *YTMUltimateDict = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"YTMUltimate"];
@@ -791,6 +792,10 @@ void YTMULogFetchedMetadataSnapshotForPlayer(YTPlayerViewController *playerVC) {
 
 %new
 - (void)saveToServer:(YTPlayerViewController *)playerVC {
+    if (!YTMUCopyServerAPIKey(NULL).length) {
+        YTMUPresentServerAPIKeyEntry(playerVC, nil);
+        return;
+    }
     YTPlayerResponse *playerResponse = playerVC.playerResponse;
     NSString *urlStr = playerResponse.playerData.streamingData.hlsManifestURL;
 

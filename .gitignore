@@ -3,3 +3,7 @@
 .upload.swp
 .vscode/
 packages/
+
+# Local sideload artifacts and validation logs
+*.ipa
+data/ytmusicultimate-v3-switch/

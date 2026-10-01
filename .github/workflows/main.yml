@@ -110,9 +110,6 @@ jobs:
       - name: Inject tweak into provided IPA
         run: cyan -i ytm.ipa -o "${{ env.IPA_NAME }}" -uwsf ytmult.deb -n "${{ inputs.display_name }}" -b ${{ inputs.bundle_id }}
 
-      - name: Patch ATS For Server Access
-        run: ./main/scripts/patch_ipa_ats.sh "${{ env.IPA_NAME }}"
-
       - name: Run Regression Checks
         run: python3 ./main/scripts/regression_checks.py --ipa "${{ env.IPA_NAME }}"
 

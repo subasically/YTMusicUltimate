@@ -1,3 +1,4 @@
+#import "YTMUServerUpload.h"
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import "Headers/YTMNowPlayingViewController.h"
@@ -49,7 +50,7 @@ static BOOL YTMUShouldPostLibraryNtfy(NSString *title) {
 }
 
 static NSString *YTMULibraryExistsEndpoint(void) {
-    return YTMUTrimmedStringValue(YTMUSettings()[@"libraryExistsEndpoint"]) ?: @"https://radio-v2.subasically.me/api/tracks/exists";
+    return YTMUServerEndpoint(NSUserDefaults.standardUserDefaults, @"libraryExistsEndpoint", @"/api/tracks/exists");
 }
 
 static NSString *YTMUSafeString(id value) {
@@ -353,7 +354,7 @@ static void YTMUSendLibraryResultLog(NSString *queryTitle, NSString *queryArtist
             return [self resultByMergingMetadataFromDictionary:dataDictionary intoResult:result];
         }
 
-        NSString *message = YTMUSafeString(dictionary[@"message"]) ?: YTMUSafeString(dictionary[@"detail"]);
+        NSString *message = YTMUSafeString(dictionary[@"error"]) ?: YTMUSafeString(dictionary[@"message"]) ?: YTMUSafeString(dictionary[@"detail"]);
         return [self resultWithState:@"unrecognized-response"
                               exists:NO
                           statusCode:statusCode
@@ -413,7 +414,7 @@ static void YTMUSendLibraryResultLog(NSString *queryTitle, NSString *queryArtist
     }
 
     NSURL *url = [NSURL URLWithString:YTMULibraryExistsEndpoint()];
-    if (!url) {
+    if (!YTMUIsSecureServerURL(url)) {
         NSDictionary *result = [self resultWithState:@"invalid-endpoint" exists:NO statusCode:0 detail:@"library exists endpoint is invalid" responseSummary:nil];
         YTMUSendLibraryRequestLog(@"error", requestTitle, requestArtist, result);
         [self finishPendingChecksForKey:requestKey result:result];
@@ -458,7 +459,7 @@ static void YTMUSendLibraryResultLog(NSString *queryTitle, NSString *queryArtist
 
         if (statusCode < 200 || statusCode >= 300) {
             NSString *responseText = data.length > 0 ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
-            NSDictionary *result = [self resultWithState:@"http-error" exists:NO statusCode:statusCode detail:[NSString stringWithFormat:@"HTTP %ld", (long)statusCode] responseSummary:responseText];
+            NSDictionary *result = [self resultWithState:@"http-error" exists:NO statusCode:statusCode detail:YTMUServerErrorMessage(data) ?: [NSString stringWithFormat:@"HTTP %ld", (long)statusCode] responseSummary:responseText];
             YTMUSendLibraryRequestLog(@"error", requestTitle, requestArtist, result);
             [self finishPendingChecksForKey:requestKey result:result];
             return;

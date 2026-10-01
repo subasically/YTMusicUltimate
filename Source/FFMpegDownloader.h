@@ -7,7 +7,7 @@
 #import "Utils/MBProgressHUD/MBProgressHUD.h"
 #import "Headers/Localization.h"
 
-@interface FFMpegDownloader : NSObject <LogDelegate, StatisticsDelegate>
+@interface FFMpegDownloader : NSObject <LogDelegate, StatisticsDelegate, NSURLSessionTaskDelegate>
 @property (nonatomic, strong) MBProgressHUD *hud;
 @property (nonatomic, strong) NSString *tempName;
 @property (nonatomic, strong) NSString *mediaName;
